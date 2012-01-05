@@ -26,7 +26,7 @@
 
 # Board
 TARGET_BOARD_PLATFORM := s5p6442
-TARGET_CPU_ABI := armeabi-v6l
+TARGET_CPU_ABI := armeabi
 #TARGET_CPU_ABI := armeabi
 TARGET_CPU_ABI2 := armeabi
 TARGET_ARCH_VARIANT := armv6-vfp
@@ -42,16 +42,19 @@ BOARD_VENDOR_USE_AKMD := akm8973
 
 # Camera
 USE_CAMERA_STUB := false
+ifeq ($(USE_CAMERA_STUB),false)
 BOARD_USE_FROYO_LIBCAMERA := true
 BOARD_CAMERA_LIBRARIES := libcamera
+endif
+#BOARD_CAMERA_LIBRARIES := libcamera
 #BUILD_PV_VIDEO_ENCODERS := 1
-BOARD_V4L2_DEVICE := /dev/video2
-BOARD_CAMERA_DEVICE := /dev/video0
+#BOARD_V4L2_DEVICE := /dev/video2
+#BOARD_CAMERA_DEVICE := /dev/video0
 
 # 2d/3d
 TARGET_BOARD_PLATFORM_GPU := fimg
 TARGET_LIBAGL_USE_GRALLOC_COPYBITS := true
-BOARD_EGL_CFG := vendor/samsung/apollo/proprietary/JPM/egl.cfg
+BOARD_EGL_CFG := vendor/samsung/apollo/proprietary/CM/egl.cfg
 #BOARD_USES_COPYBIT := true
 BOARD_NO_RGBX_8888 := true
 #BOARD_NO_32BPP := true
@@ -70,7 +73,7 @@ TARGET_SENSORS_NO_OPEN_CHECK := true
 BOARD_MOBILEDATA_INTERFACE_NAME := "pdp0"
 
 # Misc
-WITH_DEXPREOPT := true
+#WITH_DEXPREOPT := true
 WITH_JIT := true
 ENABLE_JSC_JIT := true
 JS_ENGINE := v8
@@ -139,7 +142,7 @@ BOARD_USES_BML_OVER_MTD := false
 BOARD_CUSTOM_RECOVERY_KEYMAPPING := ../../device/samsung/apollo/recovery/recovery_ui.c
 BOARD_BOOT_DEVICE := /dev/block/bml5
 BOARD_DATA_DEVICE := /dev/block/stl7
-BOARD_DATA_FILESYSTEM := ext4
+BOARD_DATA_FILESYSTEM := auto
 BOARD_DATA_FILESYSTEM_OPTIONS := llw,check=no,nosuid,nodev
 BOARD_HAS_DATADATA := false
 BOARD_SYSTEM_DEVICE := /dev/block/stl6

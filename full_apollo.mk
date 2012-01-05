@@ -23,6 +23,7 @@
 #$(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 # This is where we'd set a backup provider if we had one
 #$(call inherit-product, device/sample/products/backup_overlay.mk)
+#$(call inherit-product, vendor/samsung/apollo/apollo-vendor.mk)
 $(call inherit-product, device/samsung/apollo/BoardConfig.mk)
 $(call inherit-product, device/samsung/apollo/device.mk)
 $(call inherit-product, $(SRC_TARGET_DIR)/product/full.mk)
