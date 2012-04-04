@@ -25,6 +25,7 @@
 
 #include <hardware_legacy/AudioHardwareBase.h>
 
+#include "secril-client.h"
 
 extern "C" {
     struct pcm;
@@ -107,7 +108,7 @@ public:
             const char *getOutputRouteFromDevice(uint32_t device);
             const char *getInputRouteFromDevice(uint32_t device);
             const char *getVoiceRouteFromDevice(uint32_t device);
-            const char *getMicPathFromDevice();
+            const char *getMicPathFromDevice(uint32_t device);
 
             status_t setIncallPath_l(uint32_t device);
             status_t setVoiceMemoPath_l(String8 path);
@@ -116,7 +117,7 @@ public:
             void enableFMRadio();
             void disableFMRadio();
             status_t setFMRadioPath_l(uint32_t device);
-#endif 
+#endif
 //            status_t setInputSource_l(String8 source);
 
     static uint32_t    getInputSampleRate(uint32_t sampleRate);
@@ -157,6 +158,19 @@ private:
 
     //String8         mInputSource;
     bool            mBluetoothNrec;
+    void*           mSecRilLibHandle;
+    HRilClient      mRilClient;
+    HRilClient      (*openClientRILD)  (void);
+    int             (*disconnectRILD)  (HRilClient);
+    int             (*closeClientRILD) (HRilClient);
+    int             (*isConnectedRILD) (HRilClient);
+    int             (*connectRILD)     (HRilClient);
+/*    int             (*setCallVolume)   (HRilClient, SoundType, int);
+    int             (*setCallAudioPath)(HRilClient, AudioPath);
+    int             (*setCallClockSync)(HRilClient, SoundClockCondition);*/
+    void            loadRILD(void);
+    status_t        connectRILDIfRequired(void);
+
 #ifdef HAVE_FM_RADIO
     int             mFmFd;
     float           mFmVolume;

@@ -5,7 +5,7 @@
 * you may not use this file except in compliance with the License.
 * You may obtain a copy of the License at
 *
-*      http://www.apache.org/licenses/LICENSE-2.0
+*      http://www.apache.org/licenses/LICENSE-2.0 
 *
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,12 +14,10 @@
 * limitations under the License.
 */
 
-
 #define LOG_TAG "copybit"
 
 #include <cutils/log.h>
 
-#include <linux/msm_mdp.h>
 #include <linux/fb.h>
 
 #include <stdint.h>
@@ -33,34 +31,40 @@
 #include <sys/mman.h>
 
 #include <hardware/copybit.h>
+#include <hardware/hardware.h>
+
+#include <linux/android_pmem.h>
 
 #include "gralloc_priv.h"
 #include "s3c_g2d.h"
 
-//#define COPYBIT_DEBUG
+#define MAX_DIMENSION 2040
 
 #ifdef COPYBIT_DEBUG
-#define DEBUG_ENTER()	LOGD("Entering %s", __func__); sleep(5)
-#define DEBUG_LEAVE()	LOGD("Leaving %s", __func__); sleep(5)
-#define DEBUG(args...)	LOGD(args)
-#else
-#define DEBUG_ENTER()
-#define DEBUG_LEAVE()
-#define DEBUG(args...)
+#define DBOUT(arg,...) \
+LOGI(arg,__VA_ARGS__)
 #endif
 
-/******************************************************************************/
+#define DEBUG_G2D_ERRORS 0
 
-#define MAX_SCALE_FACTOR    (256)
-#define MAX_DIMENSION       (2040)
-
-/******************************************************************************/
 
 /** State information for each device instance */
+
 struct copybit_context_t {
-	struct copybit_device_t device;
-	int s3c_g2d_fd;
-	uint32_t transform;
+    struct copybit_device_t device;
+
+    int mFD_G2D;
+    int mFD;
+
+
+    int rotation;
+    int alpha;
+    int dither;
+    int transform;
+    int mFlags;
+
+        struct fb_fix_screeninfo finfo;
+        struct fb_var_screeninfo vinfo;
 };
 
 /**
@@ -68,497 +72,547 @@ struct copybit_context_t {
 */
 
 static int open_copybit(const struct hw_module_t* module, const char* name,
-						struct hw_device_t** device);
+        struct hw_device_t** device);
 
 static struct hw_module_methods_t copybit_module_methods = {
-	open:	open_copybit
+    open: open_copybit
 };
 
 /*
 * The COPYBIT Module
 */
 struct copybit_module_t HAL_MODULE_INFO_SYM = {
-	common: {
-		tag:		HARDWARE_MODULE_TAG,
-		version_major:	1,
-		version_minor:	0,
-		id:		COPYBIT_HARDWARE_MODULE_ID,
-		name:		"S5P6442 COPYBIT Module",
-		author:		"Tomasz Figa <tomasz.figa@gmail.com>",
-		methods:	&copybit_module_methods
-	}
+    common: {
+        tag: HARDWARE_MODULE_TAG,
+        version_major: 1,
+        version_minor: 0,
+        id: COPYBIT_HARDWARE_MODULE_ID,
+        name: "S5P6442 COPYBIT Module",
+        author: "Sebastien Dadier",
+        methods: &copybit_module_methods
+    }
 };
 
-/******************************************************************************/
-
 /** min of int a, b */
-static inline int min(int a, int b)
-{
-	return (a<b) ? a : b;
+static inline int min(int a, int b) {
+    return (a<b) ? a : b;
 }
 
 /** max of int a, b */
-static inline int max(int a, int b)
-{
-	return (a>b) ? a : b;
+static inline int max(int a, int b) {
+    return (a>b) ? a : b;
 }
 
 /** scale each parameter by mul/div. Assume div isn't 0 */
-static inline void MULDIV(uint32_t *a, uint32_t *b, int mul, int div)
-{
-	if (mul != div) {
-		*a = (mul * *a) / div;
-		*b = (mul * *b) / div;
-	}
+static inline void MULDIV(uint32_t *a, uint32_t *b, int mul, int div) {
+    if (mul != div) {
+        *a = (mul * *a) / div;
+        *b = (mul * *b) / div;
+    }
 }
 
 /** Determine the intersection of lhs & rhs store in out */
 static void intersect(struct copybit_rect_t *out,
-		const struct copybit_rect_t *lhs,
-		const struct copybit_rect_t *rhs)
-{
-	out->l = max(lhs->l, rhs->l);
-	out->t = max(lhs->t, rhs->t);
-	out->r = min(lhs->r, rhs->r);
-	out->b = min(lhs->b, rhs->b);
+                      const struct copybit_rect_t *lhs,
+                      const struct copybit_rect_t *rhs) {
+    out->l = max(lhs->l, rhs->l);
+    out->t = max(lhs->t, rhs->t);
+    out->r = min(lhs->r, rhs->r);
+    out->b = min(lhs->b, rhs->b);
 }
 
 /** convert COPYBIT_FORMAT to G2D format */
-static int get_format(int format)
-{
-	LOGI("copybit get_format(%d)", format);
-	switch (format) {
-	case COPYBIT_FORMAT_RGBA_5551:
-		return G2D_RGBA_5551;
-	case COPYBIT_FORMAT_RGB_565:
-		return G2D_RGB_565;
-	case COPYBIT_FORMAT_RGBX_8888:
-		return G2D_XBGR_8888;
-	case COPYBIT_FORMAT_RGBA_8888:
-		return G2D_ABGR_8888;
-	case COPYBIT_FORMAT_BGRA_8888:
-		return G2D_ARGB_8888;
-	case COPYBIT_FORMAT_RGB_888:
-		return G2D_RGB_888;
-	case COPYBIT_FORMAT_RGBA_4444:
-		return G2D_RGBA_4444;
-	default:
-		return -1;
+static int get_format(int format) {
+
+	switch (format) 
+	{
+		case COPYBIT_FORMAT_RGB_565:       return G2D_RGB_565;
+		case COPYBIT_FORMAT_RGBX_8888:     return G2D_RGBX_8888;
+		case COPYBIT_FORMAT_RGB_888:       return G2D_RGB_888;
+		case COPYBIT_FORMAT_RGBA_8888:     return G2D_RGBA_8888;
+		case COPYBIT_FORMAT_BGRA_8888:     return G2D_ARGB_8888;
+		//case COPYBIT_FORMAT_YCbCr_422_SP: return -1;
+		case COPYBIT_FORMAT_YCbCr_420_SP: return G2D_RGB_565;
+		case COPYBIT_FORMAT_YCrCb_420_SP: return G2D_RGB_565;
+		default :
+			LOGE("Copybit HAL unsupport format ! ,format is 0x%x",format);
+			return -1;
 	}
+
 }
 
-/** convert from copybit image to g2d image structure */
-static int set_image(s3c_g2d_image *img, const struct copybit_image_t *rhs)
+static uint32_t get_rotate(int transform)
 {
-	const private_handle_t* hnd =
-		static_cast<const private_handle_t*>(rhs->handle);
-	int format;
+int g2d_rotate = S3C_G2D_ROTATOR_0;
 
-	format = get_format(rhs->format);
-	if(format < 0)
-		return -1;
+switch(transform)
+{
+   /* flip source image horizontally */
+   case COPYBIT_TRANSFORM_FLIP_H:
+    g2d_rotate = S3C_G2D_ROTATOR_X_FLIP;
+    break;
+   
+   /* flip source image vertically */
+   case COPYBIT_TRANSFORM_FLIP_V:
+    g2d_rotate = S3C_G2D_ROTATOR_Y_FLIP;
+    break;
 
-	img->base = 0;
-	if(hnd->flags & private_handle_t::PRIV_FLAGS_FRAMEBUFFER)
-		img->base = hnd->smem_start;
+   /* rotate source image 90 degres */
+   case COPYBIT_TRANSFORM_ROT_90:
+    g2d_rotate = S3C_G2D_ROTATOR_90;
+    break;
+  
+   /* rotate source image 180 degres */
+   case COPYBIT_TRANSFORM_ROT_180:
+    g2d_rotate = S3C_G2D_ROTATOR_180;
+    break;
 
-	img->w		= (rhs->w + 1) & ~1;
-	img->h		= rhs->h;
-	img->offs	= hnd->offset;
-	img->fd		= hnd->fd;
-	img->fmt	= format;
-
-	return 0;
+   /* rotate source image 270 degres */
+   case COPYBIT_TRANSFORM_ROT_270:
+    g2d_rotate = S3C_G2D_ROTATOR_270;
+    break;
 }
+return g2d_rotate;
+}
+
+/** convert from copybit image to s3c_g2d_params structure */
+static int set_image(struct copybit_context_t *dev, s3c_g2d_params *req, const struct copybit_image_t *rhs, int is_src) 
+{
+    int status = 0;
+    private_handle_t* hnd = (private_handle_t*)rhs->handle;
+
+    if (is_src) {
+        req->src_full_width  = rhs->w;
+        req->src_full_height = rhs->h;
+        req->src_work_width  = rhs->w - 1;
+        req->src_work_height = rhs->h - 1;
+	req->src_colorfmt = get_format(rhs->format);
+    } else {
+        req->dst_full_width  = rhs->w;
+        req->dst_full_height = rhs->h;
+        req->dst_work_width  = rhs->w - 1;
+        req->dst_work_height = rhs->h - 1;
+	req->dst_colorfmt = get_format(rhs->format);
+    }
+	
+
+    if (hnd->flags & private_handle_t::PRIV_FLAGS_FRAMEBUFFER) {
+	//LOGI("set_image : is_src=%d - flag PRIV_FLAGS_FRAMEBUFFER", is_src);
+        if (is_src)
+            req->src_base_addr = hnd->smem_start + hnd->offset;
+        else
+            req->dst_base_addr = hnd->smem_start + hnd->offset;
+    } else if (hnd->flags & private_handle_t::PRIV_FLAGS_USES_PMEM) {
+        struct pmem_region region;
+	
+	//LOGI("set_image : is_src=%d - flag PRIV_FLAGS_USES_PMEM", is_src);
+        memset(&region, 0, sizeof(struct pmem_region));
+        if (ioctl(hnd->fd, PMEM_GET_PHYS, &region) < 0)
+        {
+            status = -errno;
+            LOGE("set_image: PMEM_GET_PHYS failed!(%s)\n", strerror(status));
+            goto error;
+        }
+	
+        if (is_src)
+            req->src_base_addr = region.offset + hnd->offset;
+       else
+            req->dst_base_addr = region.offset + hnd->offset;
+        
+    } else {
+        LOGE("set_image: unsupport flags 0x%08x\n", hnd->flags);
+        status = -EINVAL;
+    }
+
+error:
+    return status;
+	
+}
+
+/** setup rectangles */
+static void set_rects(struct copybit_context_t *dev,
+                      s3c_g2d_params *req,
+                      const struct copybit_rect_t *dst,
+                      const struct copybit_rect_t *src,
+                      const struct copybit_rect_t *scissor) {
+#if 0
+    struct copybit_rect_t clip;
+    intersect(&clip, scissor, dst);
+
+    e->dst_rect.x  = clip.l;
+    e->dst_rect.y  = clip.t;
+    e->dst_rect.w  = clip.r - clip.l;
+    e->dst_rect.h  = clip.b - clip.t;
+
+    uint32_t W, H;
+    if (dev->mFlags & COPYBIT_TRANSFORM_ROT_90) {
+        e->src_rect.x = (clip.t - dst->t) + src->t;
+        e->src_rect.y = (dst->r - clip.r) + src->l;
+        e->src_rect.w = (clip.b - clip.t);
+        e->src_rect.h = (clip.r - clip.l);
+        W = dst->b - dst->t;
+        H = dst->r - dst->l;
+    } else {
+        e->src_rect.x  = (clip.l - dst->l) + src->l;
+        e->src_rect.y  = (clip.t - dst->t) + src->t;
+        e->src_rect.w  = (clip.r - clip.l);
+        e->src_rect.h  = (clip.b - clip.t);
+        W = dst->r - dst->l;
+        H = dst->b - dst->t;
+    }
+    MULDIV(&e->src_rect.x, &e->src_rect.w, src->r - src->l, W);
+    MULDIV(&e->src_rect.y, &e->src_rect.h, src->b - src->t, H);
+    if (dev->mFlags & COPYBIT_TRANSFORM_FLIP_V) {
+        e->src_rect.y = e->src.height - (e->src_rect.y + e->src_rect.h);
+    }
+    if (dev->mFlags & COPYBIT_TRANSFORM_FLIP_H) {
+        e->src_rect.x = e->src.width  - (e->src_rect.x + e->src_rect.w);
+    }
+#endif
+    req->src_start_x = src->l;
+    req->src_start_y = src->t;
+    req->dst_start_x = dst->l;
+    req->dst_start_y = dst->t;
+
+    req->cw_x1 = 0;
+    req->cw_y1 = 0;
+ //   req->cw_x2 = dev->vinfo.xres;
+ //   req->cw_y2 = dev->vinfo.yres;
+ req->cw_x2 = req->dst_start_x+req->dst_work_width;
+req->cw_y2 = req->dst_start_y+req->dst_work_height;
+}
+
+
+
+/** copy the bits */
+static int s3c64xx_copybit(struct copybit_context_t *dev, s3c_g2d_params const *req)
+{
+    int err;
+    unsigned int cmd = S3C_G2D_ROTATOR_0;
+
+switch(dev->transform)
+{
+   case 0:
+    cmd = S3C_G2D_ROTATOR_0;
+
+    break;
+   case 4:
+    cmd = S3C_G2D_ROTATOR_90;  
+    break;
+   case 3:
+    cmd = S3C_G2D_ROTATOR_180;
+    break;
+   case 7:
+    cmd = S3C_G2D_ROTATOR_270;
+    break;
+   default:
+    cmd = S3C_G2D_ROTATOR_0;
+    break;   
+}
+
+/*    LOGE("s3c64xx_copybit: cmd = 0x%08x\n", cmd);
+    LOGE("src_base_addr 0x%08x dst_base_addr 0x%08x\n", req->src_base_addr, req->dst_base_addr);
+    LOGE("src_start_x %d src_start_y %d src_full_width %d src_full_height %d\n", req->src_start_x, req->src_start_y, req->src_full_width, req->src_full_height);
+    LOGE("dst_start_x %d dst_start_y %d dst_full_width %d dst_full_height %d\n", req->dst_start_x, req->dst_start_y, req->dst_full_width, req->dst_full_height);
+    LOGE("cw_x1 %d cw_y1 %d cw_x2 %d cw_y2 %d\n", req->cw_x1, req->cw_y1, req->cw_x2, req->cw_y2);
+    for(int i = 0; i < 8; i++)
+        LOGE("color_val[%d] 0x%08x\n", i, req->color_val[i]);
+
+    LOGE("alpha_mode %d alpha_val %d\n", req->alpha_mode, req->alpha_val);
+    LOGE("color_key_mode %d color_key_val %d\n", req->color_key_mode, req->color_key_val);*/
+    err = ioctl(dev->mFD_G2D, cmd, req);
+    LOGE_IF(err<0, "copyBits failed (%s)", strerror(errno));
+    if (err == 0) {
+        return 0;
+    } else {
+        return -errno;
+    }
+}
+
 
 /*****************************************************************************/
 
 /** Set a parameter to value */
-static int set_parameter_copybit(
-	struct copybit_device_t *dev,
-	int name,
-	int value)
+static int set_parameter_copybit(struct copybit_device_t *dev, int name, int value) 
 {
-	struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
+    struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
+int status=0;
 
-	if (!ctx)
-		return -EINVAL;
+   switch (name) 
+{
+    case COPYBIT_ROTATION_DEG:
+       //LOGI("in copybit set_parameter_copybit: name=%d value=%d\n",name,value);
+    ctx->rotation = value;
+    if(!((value==0)||(value==90)||(value==270)))
+    {
+     LOGE("In valid rotation degree\n");   
+     status=-EINVAL;        
+    }
+        break;
 
-	switch (name) {
-	case COPYBIT_ROTATION_DEG:
-		switch (value) {
-		case 0:
-			ctx->transform = 0;
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_0);
-			break;
-		case 90:
-			ctx->transform = COPYBIT_TRANSFORM_ROT_90;
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_90);
-			break;
-		case 180:
-			ctx->transform = COPYBIT_TRANSFORM_ROT_180;
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_180);
-			break;
-		case 270:
-			ctx->transform = COPYBIT_TRANSFORM_ROT_270;
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_270);
-			break;
-		default:
-			LOGE("Invalid value for COPYBIT_ROTATION_DEG");
-			return -EINVAL;
-		}
-		break;
-	case COPYBIT_PLANE_ALPHA:
-		if (value < 0)
-			value = 0;
-		if (value > ALPHA_VALUE_MAX)
-			value = ALPHA_VALUE_MAX;
-		ioctl(ctx->s3c_g2d_fd, S3C_G2D_SET_ALPHA_VAL, value);
-		break;
-	case COPYBIT_TRANSFORM:
-		switch (value) {
-		case 0:
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_0);
-			break;
-		case COPYBIT_TRANSFORM_ROT_90:
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_90);
-			break;
-		case COPYBIT_TRANSFORM_ROT_180:
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_180);
-			break;
-		case COPYBIT_TRANSFORM_ROT_270:
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_270);
-			break;
-		case COPYBIT_TRANSFORM_FLIP_H:
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_X_FLIP);
-			break;
-		case COPYBIT_TRANSFORM_FLIP_V:
-			ioctl(ctx->s3c_g2d_fd, S3C_G2D_ROTATOR_Y_FLIP);
-			break;
-		default:
-			LOGE("Invalid value for COPYBIT_TRANSFORM");
-			return -EINVAL;
-		}
-		ctx->transform = value;
-		break;
-	}
+    case COPYBIT_PLANE_ALPHA:
+    if(value<0) value=0;
+    if(value>255) value=255;
+        ctx->alpha = value;
+        break;
 
-	return 0;
+    case COPYBIT_DITHER:
+        ctx->dither = value;
+        break;
+
+    case COPYBIT_TRANSFORM:
+        ctx->transform = value;
+        break;
+
+    default:
+       LOGE("name of the set parameter not implemented\n");
+        return -EINVAL;
+    }
+    return status;
+
 }
 
 /** Get a static info value */
-static int get(struct copybit_device_t *dev, int name)
+static int get(struct copybit_device_t *dev, int name) 
 {
-	struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
-
-	if (!ctx)
-		return -EINVAL;
-
-	switch (name) {
-	case COPYBIT_MINIFICATION_LIMIT:
-		return MAX_SCALE_FACTOR;
-	case COPYBIT_MAGNIFICATION_LIMIT:
-		return MAX_SCALE_FACTOR;
-	case COPYBIT_SCALING_FRAC_BITS:
-		return 11;
-	case COPYBIT_ROTATION_STEP_DEG:
-		return 90;
-	}
-
-	return -EINVAL;
-}
-
-/*****************************************************************************/
-
-/**
- * Stretched BitBlit operation
- */
-
-static inline void set_rects(struct copybit_context_t *dev,
-		struct s3c_g2d_req *e,
-		const struct copybit_rect_t *dst,
-		const struct copybit_rect_t *src,
-		const struct copybit_rect_t *scissor)
-{
-	struct copybit_rect_t clip;
-	uint32_t H, W, h, w;
-
-	intersect(&clip, scissor, dst);
-
-	DEBUG("SRC (%d,%d) (%d,%d), DST (%d,%d), (%d,%d), "
-		"CLIP (%d,%d) (%d,%d)", src->l, src->t, src->r,
-		src->b, dst->l, dst->t, dst->r, dst->b,
-		scissor->l, scissor->t, scissor->r, scissor->b);
-
-	e->dst.l = clip.l;
-	e->dst.t = clip.t;
-	e->dst.r = clip.r - 1;
-	e->dst.b = clip.b - 1;
-
-	switch (dev->transform) {
-	case COPYBIT_TRANSFORM_ROT_90:
-		e->src.l = clip.t - dst->t + src->t;
-		e->src.t = dst->r - clip.r + src->l;
-		w = clip.b - clip.t;
-		h = clip.r - clip.l;
-		W = dst->b - dst->t;
-		H = dst->r - dst->l;
-		break;
-	case COPYBIT_TRANSFORM_ROT_180:
-		e->src.l = dst->r - clip.r + src->l;
-		e->src.t = dst->b - clip.b + src->t;
-		w = clip.r - clip.l;
-		h = clip.b - clip.t;
-		W = dst->r - dst->l;
-		H = dst->b - dst->t;
-		break;
-	case COPYBIT_TRANSFORM_ROT_270:
-		e->src.l = dst->b - clip.b + src->t;
-		e->src.t = clip.l - dst->l + src->l;
-		w = clip.b - clip.t;
-		h = clip.r - clip.l;
-		W = dst->b - dst->t;
-		H = dst->r - dst->l;
-		break;
-	default:
-		e->src.l = clip.l - dst->l + src->l;
-		e->src.t = clip.t - dst->t + src->t;
-		w = clip.r - clip.l;
-		h = clip.b - clip.t;
-		W = dst->r - dst->l;
-		H = dst->b - dst->t;
-	}
-
-	MULDIV(&e->src.l, &w, src->r - src->l, W);
-	MULDIV(&e->src.t, &h, src->b - src->t, H);
-	e->src.r = e->src.l + w - 1;
-	e->src.b = e->src.t + h - 1;
-
-//	if (dev->transform & COPYBIT_TRANSFORM_FLIP_V)
-//		e->src.t = e->src.h - (e->src.t + h);
-
-//	if (dev->transform & COPYBIT_TRANSFORM_FLIP_H)
-//		e->src.l = e->src.w  - (e->src.l + w);
-
-	DEBUG("BLIT (%d,%d) (%d,%d) => (%d,%d) (%d,%d)",
-		e->src.l, e->src.t, e->src.r, e->src.b,
-		e->dst.l, e->dst.t, e->dst.r, e->dst.b);
+    struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
+    int value;
+//LOGI("in copybit get: name=%d\n",name);
+    if (ctx) {
+        switch(name) {
+        case COPYBIT_MINIFICATION_LIMIT:
+            value = 4;
+            break;
+        case COPYBIT_MAGNIFICATION_LIMIT:
+            value = 4;
+            break;
+        case COPYBIT_SCALING_FRAC_BITS:
+            value = 32;
+            break;
+        case COPYBIT_ROTATION_STEP_DEG:
+            value = 90;
+            break;
+        default:
+            value = -EINVAL;
+        }
+    } else {
+        value = -EINVAL;
+    }
+    return value;
 }
 
 static int stretch_copybit(
-	struct copybit_device_t *dev,
-	struct copybit_image_t const *dst,
-	struct copybit_image_t const *src,
-	struct copybit_rect_t const *dst_rect,
-	struct copybit_rect_t const *src_rect,
-	struct copybit_region_t const *region)
+        struct copybit_device_t *dev,
+        struct copybit_image_t const *dst,
+        struct copybit_image_t const *src,
+        struct copybit_rect_t const *dst_rect,
+        struct copybit_rect_t const *src_rect,
+        struct copybit_region_t const *region) 
 {
-	struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
-	int status = 0;
-        LOGI("COPYBIT - stretch_copybit");
-	if (!ctx)
-		return -EINVAL;
+    struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
+    int status = 0;
+/*    LOGE("stretch_copybit: +++\n");
+    LOGE("src->w %d src->h %d dst->w %d dst->h %d\n", src->w, src->h, dst->w, dst->h);
+    LOGE("src_rect:(%d,%d) (%d, %d)\n", src_rect->l, src_rect->t, src_rect->r, src_rect->b);
+    LOGE("dst_rect:(%d,%d) (%d, %d)\n", dst_rect->l, dst_rect->t, dst_rect->r, dst_rect->b);
+    LOGE("src->format = %d\n", src->format);*/
+    if (ctx) {
+        if (ctx->alpha < 255) {
+            switch (src->format) {
+                // we don't support plane alpha with RGBA formats
+                //case COPYBIT_FORMAT_RGBA_8888:
+                case COPYBIT_FORMAT_BGRA_8888:
+                //case COPYBIT_FORMAT_RGBA_5551:
+                case COPYBIT_FORMAT_RGBA_4444:
+                    return -EINVAL;
+            }
+        }
 
-	struct s3c_g2d_req req;
-	memset(&req, 0, sizeof(req));
+        if (src_rect->l < 0 || src_rect->r > src->w ||
+            src_rect->t < 0 || src_rect->b > src->h) {
+            // this is always invalid
+            return -EINVAL;
+        }
 
-	DEBUG("SRC %dx%d fmt %d, DST %dx%d fmt %d",
-		src->w, src->h, src->format, dst->w, dst->h, dst->format);
+        if (src->w > MAX_DIMENSION || src->h > MAX_DIMENSION)
+            return -EINVAL;
 
-	if (src_rect->l < 0 || src_rect->r > src->w ||
-			src_rect->t < 0 || src_rect->b > src->h) {
-		// this is always invalid
-		return -EINVAL;
-	}
+        if (dst->w > MAX_DIMENSION || dst->h > MAX_DIMENSION)
+            return -EINVAL;
 
-	if (src->w > MAX_DIMENSION || src->h > MAX_DIMENSION)
-		return -EINVAL;
+        const struct copybit_rect_t bounds = { 0, 0, dst->w, dst->h };
+        struct copybit_rect_t clip;
+        status = 0;
+        while ((status == 0) && region->next(region, &clip)) {
+            intersect(&clip, &bounds, &clip);
+            s3c_g2d_params req;
+            memset(&req, 0, sizeof(s3c_g2d_params));
 
-	if (dst->w > MAX_DIMENSION || dst->h > MAX_DIMENSION)
-		return -EINVAL;
+            //set_infos(ctx, &req);
 
-	if(set_image(&req.dst, dst))
-		return -EINVAL;
+            status = set_image(ctx, &req, dst, 0);
+            if (status < 0)
+                break;
 
-	if(set_image(&req.src, src))
-		return -EINVAL;
+            status = set_image(ctx, &req, src, 1);
+            if (status < 0)
+                break;
 
-	struct copybit_rect_t clip;
-	while (region->next(region, &clip)) {
-		set_rects(ctx, &req, dst_rect, src_rect, &clip);
+            set_rects(ctx, &req, dst_rect, src_rect, &clip);
+//req.dst_select 	    = 0;
+//req.src_select 	    = 1;
+            status = s3c64xx_copybit(ctx, &req);
+        }
 
-                LOGI("COPYBIT - stretch_copybit - before bitblt");
-		status = ioctl(ctx->s3c_g2d_fd, S3C_G2D_BITBLT, &req);
-		if (status < 0) {
-			LOGE("copyBits failed (%s)", strerror(errno));
-			return -errno;
-		}
-	}
-
-	return 0;
+    } else {
+        status = -EINVAL;
+    }
+//    LOGE("stretch_copybit: --- status = %d\n", status);
+    return status;
 }
 
-/**
- * 1:1 BitBlit operation
- */
-
-static inline void set_rects_noscale(struct copybit_context_t *dev,
-		struct s3c_g2d_req *e,
-		const struct copybit_rect_t *dst,
-		const struct copybit_rect_t *src,
-		const struct copybit_rect_t *scissor)
-{
-	struct copybit_rect_t clip;
-	uint32_t h, w;
-
-	intersect(&clip, scissor, dst);
-
-	DEBUG("SRC (%d,%d) (%d,%d), DST (%d,%d), (%d,%d), "
-		"CLIP (%d,%d) (%d,%d)", src->l, src->t, src->r,
-		src->b, dst->l, dst->t, dst->r, dst->b,
-		scissor->l, scissor->t, scissor->r, scissor->b);
-
-	e->dst.l = clip.l;
-	e->dst.t = clip.t;
-	e->dst.r = clip.r - 1;
-	e->dst.b = clip.b - 1;
-
-	switch (dev->transform) {
-	case COPYBIT_TRANSFORM_ROT_90:
-		e->src.l = clip.t - dst->t + src->t;
-		e->src.t = dst->r - clip.r + src->l;
-		w = clip.b - clip.t;
-		h = clip.r - clip.l;
-		break;
-	case COPYBIT_TRANSFORM_ROT_180:
-		e->src.l = dst->r - clip.r + src->l;
-		e->src.t = dst->b - clip.b + src->t;
-		w = clip.r - clip.l;
-		h = clip.b - clip.t;
-		break;
-	case COPYBIT_TRANSFORM_ROT_270:
-		e->src.l = dst->b - clip.b + src->t;
-		e->src.t = clip.l - dst->l + src->l;
-		w = clip.b - clip.t;
-		h = clip.r - clip.l;
-		break;
-	default:
-		e->src.l = clip.l - dst->l + src->l;
-		e->src.t = clip.t - dst->t + src->t;
-		w = clip.r - clip.l;
-		h = clip.b - clip.t;
-	}
-
-	e->src.r = e->src.l + w - 1;
-	e->src.b = e->src.t + h - 1;
-
-//	if (dev->transform & COPYBIT_TRANSFORM_FLIP_V)
-//		e->src.t = e->src.h - (e->src.t + h);
-
-//	if (dev->transform & COPYBIT_TRANSFORM_FLIP_H)
-//		e->src.l = e->src.w  - (e->src.l + w);
-
-	LOGI("BLIT (%d,%d) (%d,%d) => (%d,%d) (%d,%d)",
-		e->src.l, e->src.t, e->src.r, e->src.b,
-		e->dst.l, e->dst.t, e->dst.r, e->dst.b);
-}
-
+/** Perform a blit type operation */
 static int blit_copybit(
-	struct copybit_device_t *dev,
-	struct copybit_image_t const *dst,
-	struct copybit_image_t const *src,
-	struct copybit_region_t const *region)
+        struct copybit_device_t *dev,
+        struct copybit_image_t const *dst,
+        struct copybit_image_t const *src,
+        struct copybit_region_t const *region) 
 {
-	struct copybit_rect_t dr = { 0, 0, dst->w, dst->h };
-	struct copybit_rect_t sr = { 0, 0, src->w, src->h };
-	struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
-	int status = 0;
-	LOGI("Before S3C_G2D_BITBLT");
-	if (!ctx)
-		return -EINVAL;
-
-	struct s3c_g2d_req req;
-	memset(&req, 0, sizeof(req));
-
-	DEBUG("SRC %dx%d fmt %d, DST %dx%d fmt %d",
-		src->w, src->h, src->format, dst->w, dst->h, dst->format);
-
-	if (src->w > MAX_DIMENSION || src->h > MAX_DIMENSION)
-		return -EINVAL;
-
-	if (dst->w > MAX_DIMENSION || dst->h > MAX_DIMENSION)
-		return -EINVAL;
-
-	if(set_image(&req.dst, dst))
-		return -EINVAL;
-
-	if(set_image(&req.src, src))
-		return -EINVAL;
-
-	struct copybit_rect_t clip;
-	while (region->next(region, &clip)) {
-		set_rects_noscale(ctx, &req, &dr, &sr, &clip);
-		status = ioctl(ctx->s3c_g2d_fd, S3C_G2D_BITBLT, &req);
-		if (status < 0) {
-			LOGE("copyBits failed (%s)", strerror(errno));
-			return -errno;
-		}
-	}
-
-	return 0;
+    struct copybit_rect_t dr = { 0, 0, dst->w, dst->h };
+    struct copybit_rect_t sr = { 0, 0, src->w, src->h };
+    return stretch_copybit(dev, dst, src, &dr, &sr, region);
 }
 
 /*****************************************************************************/
-
+#if 0
 /** Close the copybit device */
-static int close_copybit(struct hw_device_t *dev)
+static int close_copybit(struct hw_device_t *dev) 
 {
-	struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
-
-	if (ctx) {
-		close(ctx->s3c_g2d_fd);
-		free(ctx);
-	}
-
-	return 0;
+    struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
+    if (ctx) {
+        close(ctx->mFD_G2D);
+        free(ctx);
+    }
+    return 0;
 }
 
 /** Open a new instance of a copybit device using name */
 static int open_copybit(const struct hw_module_t* module, const char* name,
-			struct hw_device_t** device)
+        struct hw_device_t** device)
 {
-	int status = 0;
-	copybit_context_t *ctx;
-	LOGI("Opening COPYBIT module");
+    int status = -EINVAL;
 
-	ctx = (copybit_context_t *)malloc(sizeof(copybit_context_t));
-	if(!ctx) {
-		LOGE("Failed to allocate context data");
-		return -ENOMEM;
-	}
+    copybit_context_t *ctx;
+    ctx = (copybit_context_t *)malloc(sizeof(copybit_context_t));
+    memset(ctx, 0, sizeof(*ctx));
 
-	memset(ctx, 0, sizeof(*ctx));
+    ctx->device.common.tag = HARDWARE_DEVICE_TAG;
+    ctx->device.common.version = 1;
+    ctx->device.common.module = const_cast<hw_module_t*>(module);
+    ctx->device.common.close = close_copybit;
+    ctx->device.set_parameter = set_parameter_copybit;
+    ctx->device.get = get;
+    ctx->device.blit = blit_copybit;
+    ctx->device.stretch = stretch_copybit;
 
-	ctx->device.common.tag = HARDWARE_DEVICE_TAG;
-	ctx->device.common.version = 1;
-	ctx->device.common.module = const_cast<hw_module_t*>(module);
-	ctx->device.common.close = close_copybit;
-	ctx->device.set_parameter = set_parameter_copybit;
-	ctx->device.get = get;
-	ctx->device.blit = blit_copybit;
-	ctx->device.stretch = stretch_copybit;
+ctx->alpha = 0xff;
+ctx->rotation = 0;
+ctx->transform = 0;
 
-	ctx->s3c_g2d_fd = open("/dev/s3c-g2d", O_RDWR, 0);
-	if (ctx->s3c_g2d_fd < 0) {
-		status = errno;
-		LOGE("Error opening g2d device, errno=%d (%s)", status,
-							strerror(status));
-		free(ctx);
-		return -status;
-	}
+    ctx->mFD_G2D = open("/dev/s3c-g2d", 0);
+    
+    if (ctx->mFD_G2D < 0) 
+{
+        status = errno;
+        LOGE("Error opening frame buffer errno=%d (%s)", status, strerror(status));
+        status = -status;
+   }
 
-	ioctl(ctx->s3c_g2d_fd, S3C_G2D_SET_BLENDING, G2D_EN_ALPHA_BLEND_PERPIXEL_ALPHA);
+    *device = &ctx->device.common;
+status = 0;
 
-	*device = &ctx->device.common;
-	return 0;
+    return status;
+}
+
+#endif
+/** Close the copybit device */
+static int close_copybit(struct hw_device_t *dev) 
+{
+    struct copybit_context_t* ctx = (struct copybit_context_t*)dev;
+    if (ctx) {
+        close(ctx->mFD_G2D);
+        close(ctx->mFD);
+        free(ctx);
+    }
+    return 0;
+}
+
+/** Open a new instance of a copybit device using name */
+static int open_copybit(const struct hw_module_t* module, const char* name,
+        struct hw_device_t** device)
+{
+    int status = -EINVAL;
+    copybit_context_t *ctx;
+    LOGE("open_copybit: +++\n");
+    ctx = (copybit_context_t *)malloc(sizeof(copybit_context_t));
+    memset(ctx, 0, sizeof(*ctx));
+
+    ctx->device.common.tag = HARDWARE_DEVICE_TAG;
+    ctx->device.common.version = 1;
+    ctx->device.common.module = const_cast<hw_module_t*>(module);
+    ctx->device.common.close = close_copybit;
+    ctx->device.set_parameter = set_parameter_copybit;
+    ctx->device.get = get;
+    ctx->device.blit = blit_copybit;
+    ctx->device.stretch = stretch_copybit;
+    ctx->alpha = 0;
+    ctx->mFlags = 0;
+
+    ctx->mFD_G2D = open("/dev/s3c-g2d", O_RDWR);
+    if (ctx->mFD_G2D <0) {
+        status = errno;
+        LOGE("Error opening G2D errno=%d (%s)",
+             status, strerror(status));
+        status = -status;
+        return status;
+    }
+
+    ctx->mFD = open("/dev/graphics/fb0", O_RDWR, 0);
+    
+    if (ctx->mFD < 0) {
+        status = errno;
+        LOGE("Error opening frame buffer errno=%d (%s)",
+             status, strerror(status));
+        status = -status;
+    } else {
+        struct fb_fix_screeninfo finfo;
+        struct fb_var_screeninfo vinfo;
+        if (ioctl(ctx->mFD, FBIOGET_FSCREENINFO, &finfo) == 0 && 
+            ioctl(ctx->mFD, FBIOGET_VSCREENINFO, &vinfo) == 0) {
+#if 0
+            if (strcmp(finfo.id, "msmfb") == 0) {
+                /* Success */
+                status = 0;
+            } else {
+                LOGE("Error not msm frame buffer");
+                status = -EINVAL;
+            }
+#endif
+            status = 0;
+            memcpy(&(ctx->finfo), &finfo, sizeof(struct fb_fix_screeninfo));
+            memcpy(&(ctx->vinfo), &vinfo, sizeof(struct fb_var_screeninfo));
+
+        } else {
+            LOGE("Error executing ioctl for screen info");
+            status = -errno;
+        }
+    }
+
+    if (status == 0) {
+        *device = &ctx->device.common;
+    } else {
+        close_copybit(&ctx->device.common);
+    }
+    LOGE("open_copybit: ---\n");
+    return status;
 }

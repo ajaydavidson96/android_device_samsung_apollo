@@ -41,7 +41,7 @@
 
 #include "gralloc_priv.h"
 #include "gr.h"
-#include "s3c_g2d.h"
+//#include "s3c_g2d.h"
 
 //#define GRALLOC_FB_DEBUG
 
@@ -106,7 +106,7 @@ static int fb_setUpdateRect(struct framebuffer_device_t* dev,
 #endif
 
 /* HACK ALERT */
-#define FBIO_WAITFORVSYNC		_IOW ('F', 32, unsigned int)
+#define FBIO_WAITFORVSYNC		_IO ('F', 32)
 
 static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
 {
@@ -142,7 +142,7 @@ static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
 
 		// wait for VSYNC
 		unsigned int dummy; // No idea why is that, but it's required by the driver
-		if (ioctl(m->framebuffer->fd, FBIO_WAITFORVSYNC, &dummy) < 0) {
+		if (ioctl(m->framebuffer->fd, FBIO_WAITFORVSYNC) < 0) {
 			LOGE("FBIO_WAITFORVSYNC failed");
 			return 0;
 		}
@@ -180,14 +180,19 @@ static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
 
 static int fb_compositionComplete(struct framebuffer_device_t* dev)
 {
-	DEBUG_ENTER();
 	// TODO: Properly implement composition complete callback
 	glFinish();
 
-	DEBUG_LEAVE();
 	return 0;
 }
 
+/*int compositionComplete(struct framebuffer_device_t* dev)
+{
+	unsigned char pixels[4];
+	glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	/* The return value is not clear, but at least it is not checked. */
+/*	return 0;
+}*/
 /*****************************************************************************/
 
 //#define FORCE_24BPP
@@ -207,7 +212,6 @@ int mapFrameBufferLocked(struct private_module_t* module)
 	};
 
 	int fd = -1;
-	int g2d_fd = -1;
 	int i=0;
 	char name[64];
 
@@ -218,12 +222,6 @@ int mapFrameBufferLocked(struct private_module_t* module)
 	}
 	if (fd < 0) {
 		LOGE("Failed to open framebuffer");
-		return -errno;
-	}
-
-	g2d_fd = open("/dev/s3c-g2d", O_RDWR, 0);
-	if (g2d_fd < 0) {
-		LOGE("Failed to open G2D device (%s)", "/dev/s3c-g2d");
 		return -errno;
 	}
 
@@ -355,7 +353,6 @@ int mapFrameBufferLocked(struct private_module_t* module)
 	module->xdpi = xdpi;
 	module->ydpi = ydpi;
 	module->fps = fps;
-	module->s3c_g2d_fd = g2d_fd;
 
 	/*
 	* map the framebuffer
@@ -376,8 +373,8 @@ int mapFrameBufferLocked(struct private_module_t* module)
 	}
 	module->framebuffer->base = intptr_t(vaddr);
 	memset(vaddr, 0, fbSize);
-
-	ioctl(g2d_fd, S3C_G2D_SET_BLENDING, G2D_PIXEL_ALPHA);
+#define S3CFB_SET_BLENDING        _IOW ('F', 500, int)
+	ioctl(fd, S3CFB_SET_BLENDING, 1);
 
 	DEBUG_LEAVE();
 	return 0;
@@ -440,6 +437,7 @@ int fb_device_open(hw_module_t const* module, const char* name,
 			const_cast<uint32_t&>(dev->device.height) = m->info.yres;
 			const_cast<int&>(dev->device.stride) = stride;
 			const_cast<int&>(dev->device.format) = m->fbFormat;
+			//const_cast<int&>(dev->device.format) = HAL_PIXEL_FORMAT_BGRA_8888;
 			const_cast<float&>(dev->device.xdpi) = m->xdpi;
 			const_cast<float&>(dev->device.ydpi) = m->ydpi;
 			const_cast<float&>(dev->device.fps) = m->fps;
@@ -460,7 +458,7 @@ int fb_device_open(hw_module_t const* module, const char* name,
 }
 
 /* Copy a pmem buffer to the framebuffer */
-
+/*
 static void
 s3c_g2d_copy_buffer(int s3c_g2d_fd, buffer_handle_t handle, unsigned long buffer_base,
 		int fd, unsigned long fb_base,
@@ -518,4 +516,4 @@ s3c_g2d_copy_buffer(int s3c_g2d_fd, buffer_handle_t handle, unsigned long buffer
 		LOGE("S3C_G2D_BITBLT failed = %d", -errno);
 
 	DEBUG_LEAVE();
-}
+}*/

@@ -60,12 +60,18 @@ PRODUCT_COPY_FILES += \
 # HAL libs and other system binaries
 PRODUCT_PACKAGES += \
     copybit.GT-I5800 \
+    gralloc.GT-I5800 \
     gps.GT-I5800 \
     sensors.GT-I5800 \
     lights.GT-I5800 \
+    libGLES_fimg \
     brcm_patchram_plus \
     screencap \
-    dexpreopt
+    dexpreopt \
+    libstagefrighthw \
+    libsecjpeg \
+    libcamera \
+    libsecgps.so 
 
 # Samsung Specific tools
 PRODUCT_PACKAGES += \
@@ -77,6 +83,17 @@ PRODUCT_PACKAGES += \
     Pacman \
     Stk \
     Superuser
+
+#Hardware OMX Codecs
+PRODUCT_PACKAGES += \
+    libSEC_OMX_Core.s5p6442 \
+    libOMX.SEC.AVC.Decoder.s5p6442 \
+    libOMX.SEC.M4V.Decoder.s5p6442 \
+    libOMX.SEC.AVC.Encoder.s5p6442 \
+    libOMX.SEC.M4V.Encoder.s5p6442
+
+PRODUCT_COPY_FILES += \
+	device/samsung/apollo/sec_mm/sec_omx/sec_omx_core/secomxregistry:system/etc/secomxregistry
 
 # Theme packages
 PRODUCT_PACKAGES += \
@@ -131,6 +148,13 @@ PRODUCT_COPY_FILES += \
 	device/samsung/apollo/wifi/wifi.conf:system/etc/wifi/wifi.conf \
 	device/samsung/apollo/wifi/wpa_supplicant.conf:system/etc/wifi/wpa_supplicant.conf 
 
+# ril
+PRODUCT_COPY_FILES += \
+	device/samsung/apollo/prebuilt/ril/libril.so:system/lib/libril.so \
+	device/samsung/apollo/prebuilt/ril/libsec-ril.so:system/lib/libsec-ril.so \
+	device/samsung/apollo/prebuilt/ril/rild:system/bin/rild
+
+
 PRODUCT_PROPERTY_OVERRIDES += \
        wifi.interface=eth0 \
        wifi.supplicant_scan_interval=20 \
@@ -158,7 +182,7 @@ PRODUCT_PROPERTY_OVERRIDES += \
 
 
 # we have enough storage space to hold precise GC data
-PRODUCT_TAGS += dalvik.gc.type-precise
+# PRODUCT_TAGS += dalvik.gc.type-precise
 
 # Extended JNI checks
 # The extended JNI checks will cause the system to run more slowly, but they can spot a variety of nasty bugs 

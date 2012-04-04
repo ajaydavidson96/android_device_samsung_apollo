@@ -81,10 +81,10 @@
 
         <EncoderProfile quality="high" fileFormat="mp4" duration="60">
             <Video codec="m4v"
-                   bitRate="3000000"
-                   width="720"
-                   height="480"
-                   frameRate="24" />
+                   bitRate="2000000"
+                   width="320"
+                   height="240"
+                   frameRate="15" />
 
             <Audio codec="amrnb"
                    bitRate="12200"
@@ -162,3 +162,4 @@
     <VideoDecoderCap name="wmv" enabled="false"/>
     <AudioDecoderCap name="wma" enabled="false"/>
 </MediaSettings>
+

@@ -53,8 +53,6 @@ struct private_module_t {
     float ydpi;
     float fps;
     
-    int s3c_g2d_fd;
-    
     enum {
         // flag to indicate we'll post this buffer
         PRIV_USAGE_LOCKED_FOR_POST = 0x80000000

@@ -255,8 +255,8 @@ status_t AudioHardware::setMode(int mode)
     status_t status;
 
     // bump thread priority to speed up mutex acquisition
-    //int  priority = getpriority(PRIO_PROCESS, 0);
-    //setpriority(PRIO_PROCESS, 0, ANDROID_PRIORITY_URGENT_AUDIO);
+    int  priority = getpriority(PRIO_PROCESS, 0);
+    setpriority(PRIO_PROCESS, 0, ANDROID_PRIORITY_URGENT_AUDIO);
 
     // Mutex acquisition order is always out -> in -> hw
     AutoMutex lock(mLock);
@@ -297,7 +297,7 @@ status_t AudioHardware::setMode(int mode)
     }
     // spIn is not 0 here only if the input is active
 
-    //setpriority(PRIO_PROCESS, 0, priority);
+    setpriority(PRIO_PROCESS, 0, priority);
 
     int prevMode = mMode;
     status = AudioHardwareBase::setMode(mode);
@@ -678,16 +678,15 @@ status_t AudioHardware::setIncallPath_l(uint32_t device)
             mixer_ctl_select(ctl,router);
             TRACE_DRIVER_OUT
             //trying to fix input router
-/*            if (router == (const char *)"SPK" || router == (const char *)"RCV") {
-                struct mixer_ctl *ctlMic = mixer_get_control(mMixer, "MIC Path", 0);
+   /*                struct mixer_ctl *ctlMic = mixer_get_control(mMixer, "MIC Path", 0);
                 if (ctlMic != NULL ) {
                     // First set Mic Path to suitable path
                     TRACE_DRIVER_IN(DRV_MIXER_SEL)
-                    mixer_ctl_select(ctlMic , getMicPathFromDevice());
+                    mixer_ctl_select(ctlMic , getMicPathFromDevice(mDevices));
                     TRACE_DRIVER_OUT
                 }
                 //TODO: if possible, we should set each  MIC Path's gain.
-                if (router == (const char *)"SPK") {
+             if (router == (const char *)"SPK") {
                     ctlMic = mixer_get_control(mMixer, "MIC Gain", 0);
                     if (ctlMic != NULL ) {
                         // Second set mic gain to default (33, means index value 5)
@@ -841,9 +840,14 @@ const char *AudioHardware::getInputRouteFromDevice(uint32_t device)
         return "Off";
     }
 
+    LOGE("AudioHardware::getInputRouteFromDevice : device = %d", device);
+
     switch (device) {
         case AudioSystem::DEVICE_IN_BUILTIN_MIC:
-            return "MAIN";
+	case AudioSystem::DEVICE_IN_VOICE_CALL:
+	case AudioSystem::DEVICE_IN_COMMUNICATION:
+	case AudioSystem::DEVICE_IN_AMBIENT:
+	    return "SUB";
         case AudioSystem::DEVICE_IN_WIRED_HEADSET:
             return "EAR";
         case AudioSystem::DEVICE_IN_BLUETOOTH_SCO_HEADSET:
@@ -853,9 +857,9 @@ const char *AudioHardware::getInputRouteFromDevice(uint32_t device)
     }
 }
 
-const char *AudioHardware::getMicPathFromDevice()
+const char *AudioHardware::getMicPathFromDevice(uint32_t device)
 {
-    uint32_t device = mOutput->device();
+
     if (AudioSystem::DEVICE_OUT_SPEAKER & device)
         return "Main Mic";
     else if (AudioSystem::DEVICE_OUT_EARPIECE & device)
@@ -1132,7 +1136,7 @@ void AudioHardware::AudioStreamOutALSA::close_l()
 {
     if (mMixer) {
 
-        mRouteCtl = mixer_get_control(mMixer, "Idle Mode", 0);
+       mRouteCtl = mixer_get_control(mMixer, "Idle Mode", 0);
         LOGE_IF(mRouteCtl == NULL, "close_l() could not get mixer ctl");
         if (mRouteCtl != NULL) 
             mixer_ctl_select(mRouteCtl, "ON");
@@ -1164,30 +1168,23 @@ status_t AudioHardware::AudioStreamOutALSA::open_l()
         if (mRouteCtl != NULL) 
             mixer_ctl_select(mRouteCtl, "Off");
 
-        TRACE_DRIVER_IN(DRV_MIXER_GET)
-        mRouteCtl = mixer_get_control(mMixer, "Playback Path", 0);
-        TRACE_DRIVER_OUT
-    }
-    if (mHardware->mode() != AudioSystem::MODE_IN_CALL) {
-        const char *route = mHardware->getOutputRouteFromDevice(mDevices);
-        LOGD("write() wakeup setting route %s", route);
-        if (mRouteCtl) {
-            TRACE_DRIVER_IN(DRV_MIXER_SEL)
-            mixer_ctl_select(mRouteCtl, route);
-            TRACE_DRIVER_OUT
-        }
-    }
+	TRACE_DRIVER_IN(DRV_MIXER_GET)
+	mRouteCtl = mixer_get_control(mMixer, "Playback Path", 0);
+	TRACE_DRIVER_OUT
     
-/*    if (mHardware->mode() == AudioSystem::MODE_IN_CALL) {
-        const char *route = mHardware->getOutputRouteFromDevice(mDevices);
-        LOGD("write() wakeup setting route %s", route);
-        if (mRouteCtl) {
-            TRACE_DRIVER_IN(DRV_MIXER_SEL)
-            mixer_ctl_select(mRouteCtl, route);
-            TRACE_DRIVER_OUT
-        }
+	if (mHardware->mode() != AudioSystem::MODE_IN_CALL) {
+
+		const char *route = mHardware->getOutputRouteFromDevice(mDevices);
+		LOGD("write() mode != MODE_IN_CALL - wakeup setting route %s", route);
+		if (mRouteCtl) {
+		    TRACE_DRIVER_IN(DRV_MIXER_SEL)
+		    mixer_ctl_select(mRouteCtl, route);
+		    TRACE_DRIVER_OUT
+		}
+	}
+
     }
-*/
+
     return NO_ERROR;
 }
 
@@ -1524,7 +1521,7 @@ void AudioHardware::AudioStreamInALSA::close_l()
 {
     if (mMixer) {
 
-        mRouteCtl = mixer_get_control(mMixer, "Idle Mode", 0);
+      mRouteCtl = mixer_get_control(mMixer, "Idle Mode", 0);
         LOGE_IF(mRouteCtl == NULL, "open_l() could not get mixer ctl");
         if (mRouteCtl != NULL) 
             mixer_ctl_select(mRouteCtl, "ON");
@@ -1573,33 +1570,45 @@ status_t AudioHardware::AudioStreamInALSA::open_l()
     mMixer = mHardware->openMixer_l();
     if (mMixer) {
 
-        mRouteCtl = mixer_get_control(mMixer, "Idle Mode", 0);
+       mRouteCtl = mixer_get_control(mMixer, "Idle Mode", 0);
         LOGE_IF(mRouteCtl == NULL, "open_l() could not get mixer ctl");
         if (mRouteCtl != NULL) 
             mixer_ctl_select(mRouteCtl, "Off");
 
-        TRACE_DRIVER_IN(DRV_MIXER_GET)
-        mRouteCtl = mixer_get_control(mMixer, "Voice Memo Path", 0);
-        TRACE_DRIVER_OUT
-    }
 
-    if (mHardware->mode() == AudioSystem::MODE_IN_CALL) {
-     
-        struct mixer_ctl *ctlMic = mixer_get_control(mMixer, "MIC Path", 0);
-        if (ctlMic != NULL ) {
-            // set proper Mic Path router when in call.
-            TRACE_DRIVER_IN(DRV_MIXER_SEL)
-            mixer_ctl_select(ctlMic , mHardware->getMicPathFromDevice());
-            TRACE_DRIVER_OUT
-        }
-    }
-    
-    const char *route = mHardware->getInputRouteFromDevice(mDevices);
-    LOGV("read() wakeup setting route %s", route);
-    if (mRouteCtl) {
-        TRACE_DRIVER_IN(DRV_MIXER_SEL)
-        mixer_ctl_select(mRouteCtl, route);
-        TRACE_DRIVER_OUT
+	if (mHardware->mode() == AudioSystem::MODE_IN_CALL) {
+
+		struct mixer_ctl *ctlMic = mixer_get_control(mMixer, "Voice Call Path", 0);
+		if (ctlMic != NULL ) {
+		    // set proper Mic Path router when in call.
+		    LOGE("Voice Call Path - set route %s", mHardware->getInputRouteFromDevice(mDevices));
+		    TRACE_DRIVER_IN(DRV_MIXER_SEL)
+		    mixer_ctl_select(ctlMic , mHardware->getInputRouteFromDevice(mDevices));
+		    TRACE_DRIVER_OUT
+		}
+
+		ctlMic = mixer_get_control(mMixer, "MIC Path", 0);
+		if (ctlMic != NULL ) {
+		    // set proper Mic Path router when in call.
+		    LOGE("MIC Path - set route %s", mHardware->getMicPathFromDevice(mDevices));
+		    TRACE_DRIVER_IN(DRV_MIXER_SEL)
+		    mixer_ctl_select(ctlMic , mHardware->getMicPathFromDevice(mDevices));
+		    TRACE_DRIVER_OUT
+		}
+	}
+
+	if (mHardware->mode() != AudioSystem::MODE_IN_CALL) {
+
+		struct mixer_ctl *ctlMic = mixer_get_control(mMixer, "Voice Memo Path", 0);
+		if (ctlMic != NULL ) {
+		    // set proper Mic Path router when in call.
+		    LOGE("Voice Memo Path - set route %s", mHardware->getInputRouteFromDevice(mDevices));
+		    TRACE_DRIVER_IN(DRV_MIXER_SEL)
+		    mixer_ctl_select(ctlMic , mHardware->getInputRouteFromDevice(mDevices));
+		    TRACE_DRIVER_OUT
+		}
+	}
+
     }
 
     return NO_ERROR;
@@ -1661,12 +1670,12 @@ status_t AudioHardware::AudioStreamInALSA::setParameters(const String8& keyValue
         AutoMutex lock(mLock);
         if (param.get(String8(INPUT_SOURCE_KEY), source) == NO_ERROR) {
             AutoMutex hwLock(mHardware->lock());
-
+            LOGD("AudioStreamInALSA::setParameters() ----> INPUT_SOURCE_KEY");
             mMixer = mHardware->openMixer_l();
 	    if (mMixer) {
 		mRouteCtl = mixer_get_control(mMixer, "Voice Memo Path", 0);
 		if (mRouteCtl != NULL) {
-		   mixer_ctl_select(mRouteCtl, "SUB");
+		   mixer_ctl_select(mRouteCtl,  mHardware->getInputRouteFromDevice(mDevices));
 		}
 	    }
             mHardware->closeMixer_l();
@@ -1677,10 +1686,12 @@ status_t AudioHardware::AudioStreamInALSA::setParameters(const String8& keyValue
         if (param.getInt(String8(AudioParameter::keyRouting), value) == NO_ERROR)
         {
             if (value != 0) {
+		LOGD("AudioStreamInALSA::setParameters() ----> value = %d", value);
                 AutoMutex hwLock(mHardware->lock());
                 if (mDevices != (uint32_t)value) {
                     mDevices = (uint32_t)value;
                     if (mHardware->mode() != AudioSystem::MODE_IN_CALL) {
+			LOGD("AudioStreamInALSA::setParameters() ----> doStandby_l()");
                         doStandby_l();
                     }
                 }

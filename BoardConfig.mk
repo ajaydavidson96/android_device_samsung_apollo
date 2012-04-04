@@ -47,6 +47,10 @@ BOARD_CAMERA_LIBRARIES := libcamera
 #BUILD_PV_VIDEO_ENCODERS := 1
 BOARD_V4L2_DEVICE := /dev/video2
 BOARD_CAMERA_DEVICE := /dev/video0
+BOARD_USE_JPEG := true
+#BOARD_USE_CAF_LIBCAMERA_GB_REL := true
+
+DEFAULT_FB_NUM := 0
 
 # 2d/3d
 TARGET_BOARD_PLATFORM_GPU := fimg
@@ -54,18 +58,17 @@ TARGET_LIBAGL_USE_GRALLOC_COPYBITS := true
 BOARD_EGL_CFG := vendor/samsung/apollo/proprietary/JPM/egl.cfg
 #BOARD_USES_COPYBIT := true
 BOARD_NO_RGBX_8888 := true
-#BOARD_NO_32BPP := true
 BOARD_USE_SCREENCAP := true
 #BOARD_AVOID_DRAW_TEXTURE_EXTENSION := true
-
+#BOARD_USES_HW_RENDER := true
 
 # GPS
 BOARD_GPS_LIBRARIES := libsecgps libsecril-client
 BOARD_USES_GPSSHIM := true
 
 # sensors
-TARGET_USES_OLD_LIBSENSORS_HAL := true
-TARGET_SENSORS_NO_OPEN_CHECK := true
+#TARGET_USES_OLD_LIBSENSORS_HAL := true
+#TARGET_SENSORS_NO_OPEN_CHECK := true
 
 BOARD_MOBILEDATA_INTERFACE_NAME := "pdp0"
 
@@ -91,20 +94,22 @@ TARGET_NO_RADIOIMAGE := true
 # Bluetooth
 BOARD_HAVE_BLUETOOTH := true
 BOARD_HAVE_BLUETOOTH_BCM := true
-#BOARD_FORCE_STATIC_A2DP := true
+BOARD_FORCE_STATIC_A2DP := true
 #BT_ALT_STACK := true
 #BOARD_HAVE_BLUETOOTH_BCM := true
 #BRCM_BT_USE_BTL_IF := true
 #BRCM_BTL_INCLUDE_A2DP := true
 
 # usb
+RNDIS_DEVICE := "/sys/devices/virtual/sec/switch/tethering"
+BOARD_CUSTOM_USB_CONTROLLER := ../../device/samsung/apollo/UsbController.cpp
 BOARD_USE_USB_MASS_STORAGE_SWITCH := true
 TARGET_USE_CUSTOM_LUN_FILE_PATH := "/sys/devices/platform/s3c-usbgadget/gadget/lun0/file"
 BOARD_UMS_LUNFILE := "/sys/devices/platform/s3c-usbgadget/gadget/lun0/file"
 
 # Kernel : console=ttySAC1,115200 loglevel=4 no_console_suspend
 BOARD_KERNEL_CMDLINE := console=ttySAC1,115200 loglevel=4 no_console_suspend
-BOARD_KERNEL_BASE := 0x20000000
+BOARD_KERNEL_BASE := 0x22000000
 BOARD_NAND_PAGE_SIZE := 4096 -s 128
 BOARD_KERNEL_PAGESIZE := 4096
 BOARD_BOOTIMAGE_PARTITION_SIZE := 7864320
@@ -114,16 +119,13 @@ BOARD_FLASH_BLOCK_SIZE := 4096
 
 # Wifi
 BOARD_WPA_SUPPLICANT_DRIVER := WEXT
-WPA_SUPPLICANT_VERSION      := VER_0_5_X
+WPA_SUPPLICANT_VERSION      := VER_0_6_X
 BOARD_WLAN_DEVICE 	    := bcm4329
 WIFI_DRIVER_MODULE_PATH     := "/lib/modules/dhd.ko"
 WIFI_DRIVER_FW_STA_PATH     := "/system/etc/wifi/bcm4329_sta.bin"
 WIFI_DRIVER_FW_AP_PATH      := "/system/etc/wifi/bcm4329_aps.bin"
-WIFI_DRIVER_MODULE_ARG      := "firmware_path=/system/etc/wifi/bcm4329_sta.bin nvram_path=/system/etc/wifi/nvram_net.txt"
+WIFI_DRIVER_MODULE_ARG      := "firmware_path=/system/etc/wifi/bcm4329_sta.bin nvram_path=/system/etc/wifi/nvram_net.txt dhd_watchdog_ms=10 dhd_poll=1"
 WIFI_DRIVER_MODULE_NAME     := "dhd"
-#CONFIG_DRIVER_WEXT := true
-#BOARD_WEXT_NO_COMBO_SCAN := true
-#BOARD_NETWORK_INTERFACES_DIR := "/sys/devices/virtual/net"
 
 #
 BOARD_RECOVERY_IGNORE_BOOTABLES := true
